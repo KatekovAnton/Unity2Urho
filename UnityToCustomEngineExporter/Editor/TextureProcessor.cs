@@ -77,6 +77,7 @@ namespace Assets.Scripts.UnityToCustomEngineExporter.Editor
         private void SaveTexture(Texture2D texture, string fullOutputPath)
         {
             var ext = Path.GetExtension(fullOutputPath).ToLower();
+            Directory.CreateDirectory(Path.GetDirectoryName(fullOutputPath));
             switch (ext)
             {
                 case ".png":

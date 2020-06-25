@@ -172,7 +172,7 @@ namespace Assets.Scripts.UnityToCustomEngineExporter.Editor.Urho3D
                         else if (light.type == LightType.Point)
                             WriteAttribute(writer, subSubPrefix, "Range", light.range);
                         WriteAttribute(writer, subSubPrefix, "Color", light.color);
-                        WriteAttribute(writer, subSubPrefix, "Brightness Multiplier", light.intensity * 156.25f);
+                        WriteAttribute(writer, subSubPrefix, "Brightness Multiplier", light.intensity * 1000.0f);
                         WriteAttribute(writer, subSubPrefix, "Use Physical Values", "true");
                         WriteAttribute(writer, subSubPrefix, "Cast Shadows", light.shadows != LightShadows.None);
                         if (light.cookie != null)
