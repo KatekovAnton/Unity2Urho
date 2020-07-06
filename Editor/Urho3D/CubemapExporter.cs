@@ -47,7 +47,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 if (writer != null)
                 {
                     var ddsName = resourceName.Replace(".xml", ".dds");
-                    DDS.SaveAsRgbaDds(texture, _engine.GetTargetFilePath(ddsName), false);
+                    DDS.SaveAsRgbaDds(texture, _engine.GetTargetFilePath(ddsName), true);
                     writer.WriteStartElement("cubemap");
                     writer.WriteWhitespace(Environment.NewLine);
                     writer.WriteStartElement("image");
