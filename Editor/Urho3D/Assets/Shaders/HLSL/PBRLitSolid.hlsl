@@ -121,7 +121,11 @@ void VS(float4 iPos : POSITION,
             // If using lightmap, disregard zone ambient light
             // If using AO, calculate ambient in the PS
             oVertexLight = float3(0.0, 0.0, 0.0);
-            oTexCoord2 = iTexCoord2;
+            #if defined(LIGHTMAP)
+                oTexCoord2 = iTexCoord2;
+            #else
+                oTexCoord2 = GetTexCoord(iTexCoord);
+            #endif
         #else
             oVertexLight = GetAmbient(GetZonePos(worldPos));
         #endif
@@ -301,9 +305,11 @@ void PS(
     #else
         // Ambient & per-vertex lighting
         float3 finalColor = iVertexLight * diffColor.rgb;
+        float3 ambientOcclusion = float3(1.0, 1.0, 1.0);
         #ifdef AO
             // If using AO, the vertex light ambient is black, calculate occluded ambient here
-            finalColor += Sample2D(EmissiveMap, iTexCoord2).rgb * cAmbientColor.rgb * diffColor.rgb;
+            ambientOcclusion = Sample2D(EmissiveMap, iTexCoord2).rgb;
+            finalColor += ambientOcclusion * cAmbientColor.rgb * diffColor.rgb;
         #endif
 
         #ifdef MATERIAL
@@ -323,7 +329,7 @@ void PS(
         #ifdef IBL
             const float3 iblColor = ImageBasedLighting(reflection, normal, toCamera, diffColor, specColor, roughness, cubeColor);
             const float gamma = 0;
-            finalColor += iblColor;
+            finalColor += iblColor * ambientOcclusion;
         #endif
 
         #ifdef ENVCUBEMAP
