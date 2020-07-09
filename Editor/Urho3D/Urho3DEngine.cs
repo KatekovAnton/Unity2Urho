@@ -5,7 +5,6 @@ using System.Text;
 using System.Threading;
 using System.Xml;
 using Assets.Scripts.UnityToCustomEngineExporter.Editor.Urho3D;
-using GLTF.Schema;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.ProBuilder;

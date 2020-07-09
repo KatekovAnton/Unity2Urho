@@ -142,37 +142,6 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 }
                 else if (component is Light light)
                 {
-                    if (light != null && light.type != LightType.Area)
-                    {
-                        StartCompoent(writer, subPrefix, "Light");
-                        if (light.type == LightType.Directional)
-                        {
-                            WriteAttribute(writer, subSubPrefix, "Light Type", "Directional");
-                            WriteAttribute(writer, subSubPrefix, "CSM Splits", "2 16 128 1024");
-                        }
-                        else if (light.type == LightType.Spot)
-                        {
-                            WriteAttribute(writer, subSubPrefix, "Light Type", "Spot");
-                        }
-                        else if (light.type == LightType.Point)
-                        {
-                            WriteAttribute(writer, subSubPrefix, "Range", light.range);
-                        }
-
-                        WriteAttribute(writer, subSubPrefix, "Color", light.color);
-                        WriteAttribute(writer, subSubPrefix, "Brightness Multiplier", light.intensity * 1000.0f);
-                        WriteAttribute(writer, subSubPrefix, "Use Physical Values", "true");
-                        WriteAttribute(writer, subSubPrefix, "Depth Constant Bias", 0.0001f);
-                        WriteAttribute(writer, subSubPrefix, "Cast Shadows", light.shadows != LightShadows.None);
-                        if (light.cookie != null)
-                        {
-                            _engine.ScheduleTexture(light.cookie);
-                            WriteAttribute(writer, subSubPrefix, "Light Shape Texture",
-                                "Texture2D;" + _engine.EvaluateTextrueName(light.cookie));
-                        }
-
-                        EndElement(writer, subPrefix);
-                    }
                     ExportLight(writer, light, subPrefix, subSubPrefix);
                 }
                 else if (component is AudioSource audioSource)
