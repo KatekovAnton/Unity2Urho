@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Xml;
 using Assets.Scripts.UnityToCustomEngineExporter.Editor.Urho3D;
@@ -17,7 +16,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             var material = new UrhoPBRMaterial();
             material.NormalTexture = _engine.EvaluateTextrueName(arguments.Bump);
             material.EmissiveTexture = _engine.EvaluateTextrueName(arguments.Emission);
-            material.AOTexture = _engine.EvaluateTextrueName(arguments.Occlusion);
+            material.AOTexture = BuildAOTextureName(arguments.Occlusion, arguments.OcclusionStrength);
             var diffuseTextrueName = _engine.EvaluateTextrueName(arguments.Diffuse);
             var specularTexture = _engine.EvaluateTextrueName(arguments.PBRSpecular.Texture);
             string smoothnessTexture;
@@ -55,7 +54,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                     {
                         baseColorTextureNameBuilder.Append(Path.GetDirectoryName(specularTexture).FixAssetSeparator());
                     }
-                    baseColorTextureNameBuilder.Append('/');
+                    if (baseColorTextureNameBuilder.Length > 0) baseColorTextureNameBuilder.Append('/');
                     if (!string.IsNullOrWhiteSpace(diffuseTextrueName))
                     {
                         baseColorTextureNameBuilder.Append(Path.GetFileNameWithoutExtension(diffuseTextrueName));
@@ -87,7 +86,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                     {
                         metallicTextureNameBuilder.Append(Path.GetDirectoryName(diffuseTextrueName).FixAssetSeparator());
                     }
-                    metallicTextureNameBuilder.Append('/');
+                    if (metallicTextureNameBuilder.Length > 0) metallicTextureNameBuilder.Append('/');
                     if (!string.IsNullOrWhiteSpace(specularTexture))
                     {
                         metallicTextureNameBuilder.Append(Path.GetFileNameWithoutExtension(specularTexture));
@@ -163,7 +162,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             var material = new UrhoPBRMaterial();
             material.NormalTexture = _engine.EvaluateTextrueName(arguments.Bump);
             material.EmissiveTexture = _engine.EvaluateTextrueName(arguments.Emission);
-            material.AOTexture = _engine.EvaluateTextrueName(arguments.Occlusion);
+            material.AOTexture = BuildAOTextureName(arguments.Occlusion, arguments.OcclusionStrength);
             material.BaseColorTexture = _engine.EvaluateTextrueName(arguments.BaseColor);
             var metalicGlossinesTexture = _engine.EvaluateTextrueName(arguments.MetallicGloss);
             var smoothnessTexture = _engine.EvaluateTextrueName(arguments.Smoothness);
@@ -184,8 +183,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 {
                     texNameBuilder.Append(Path.GetDirectoryName(smoothnessTexture).FixAssetSeparator());
                 }
-
-                texNameBuilder.Append('/');
+                if (texNameBuilder.Length > 0) texNameBuilder.Append('/');
 
                 if (!string.IsNullOrWhiteSpace(metalicGlossinesTexture))
                 {
@@ -218,6 +216,23 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             material.VOffset = new Vector4(0, arguments.MainTextureScale.y, 0, arguments.MainTextureOffset.y);
             material.EvaluateTechnique();
             return material;
+        }
+
+        private string BuildAOTextureName(Texture occlusion, float occlusionStrength)
+        {
+            if (occlusion == null)
+                return null;
+            if (occlusionStrength <= 0)
+                return null;
+            var baseName = _engine.EvaluateTextrueName(occlusion);
+            if (occlusionStrength >= 0.999f)
+            {
+                return ExportUtils.ReplaceExtension(baseName, ".AO.png");
+            }
+            else
+            {
+                return ExportUtils.ReplaceExtension(baseName, string.Format(CultureInfo.InvariantCulture, ".AO.{0:0.000}.png", occlusionStrength));
+            }
         }
 
 
@@ -356,23 +371,26 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             if (String.IsNullOrWhiteSpace(assetPath))
                 return null;
             if (assetPath.EndsWith(".mat", StringComparison.InvariantCultureIgnoreCase))
-                return ExportUtils.ReplaceExtension(ExportUtils.GetRelPathFromAssetPath(assetPath), ".xml");
+                return ExportUtils.ReplaceExtension(ExportUtils.GetRelPathFromAssetPath(_engine.Subfolder, assetPath), ".xml");
             var newExt = "/" + ExportUtils.SafeFileName(material.name) + ".xml";
-            return ExportUtils.ReplaceExtension(ExportUtils.GetRelPathFromAssetPath(assetPath), newExt);
+            return ExportUtils.ReplaceExtension(ExportUtils.GetRelPathFromAssetPath(_engine.Subfolder, assetPath), newExt);
         }
 
         public void ExportMaterial(Material material)
         {
             var path = EvaluateMaterialName(material);
             var mat = new MaterialDescription(material);
+            var assetGuid = material.GetKey();
             if (mat.SpecularGlossiness != null)
-                ExportSpecularGlossiness(path, mat.SpecularGlossiness);
+            {
+                ExportSpecularGlossiness(assetGuid, path, mat.SpecularGlossiness);
+            }
             else if (mat.MetallicGlossiness != null)
-                ExportMetallicRoughness(path, mat.MetallicGlossiness);
+                ExportMetallicRoughness(assetGuid, path, mat.MetallicGlossiness);
             else if (mat.Skybox != null)
-                ExportSkybox(path, mat.Skybox);
+                ExportSkybox(assetGuid, path, mat.Skybox);
             else
-                ExportLegacy(path, mat.Legacy ?? new LegacyShaderArguments());
+                ExportLegacy(assetGuid, path, mat.Legacy ?? new LegacyShaderArguments());
         }
 
         private void WriteTechnique(XmlWriter writer, string name)
@@ -406,18 +424,20 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             return true;
         }
 
-        private void ExportSkybox(string urhoPath, SkyboxShaderArguments arguments)
+        private void ExportSkybox(AssetKey assetGuid, string urhoPath, SkyboxShaderArguments arguments)
         {
-            using (var writer = _engine.TryCreateXml(urhoPath, DateTime.MaxValue))
+            using (var writer = _engine.TryCreateXml(assetGuid, urhoPath, DateTime.MaxValue))
             {
                 if (writer == null)
                     return;
                 //writer.WriteStartDocument();
-                writer.WriteWhitespace(Environment.NewLine);
+                //writer.WriteWhitespace(Environment.NewLine);
                 writer.WriteStartElement("material");
                 writer.WriteWhitespace(Environment.NewLine);
-                WriteTechnique(writer, "Techniques/DiffSkyboxHDRScale.xml");
-                //WriteTechnique(writer, "Techniques/DiffSkybox.xml");
+                var technique = "Techniques/DiffSkyboxHDRScale.xml";
+
+                var anyFace = arguments.BackTex ?? arguments.DownTex ?? arguments.FrontTex ??
+                              arguments.LeftTex ?? arguments.RightTex ?? arguments.UpTex;
                 if (arguments.Skybox != null)
                 {
                     _engine.ScheduleAssetExport(arguments.Skybox);
@@ -425,13 +445,55 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                     if (arguments.Skybox is Cubemap cubemap)
                         name = _engine.EvaluateCubemapName(cubemap);
                     else
+                    {
                         name = _engine.EvaluateTextrueName(arguments.Skybox);
+                        technique = "Techniques/DiffSkydome.xml";
+                    }
+
                     if (!String.IsNullOrWhiteSpace(name)) WriteTexture(name, writer, "diffuse");
+                }
+                else if (anyFace != null)
+                {
+                    var cubemapName = ExportUtils.ReplaceExtension(urhoPath,".Cubemap.xml");
+                    using (var cubemapWriter = _engine.TryCreateXml(assetGuid, cubemapName, DateTime.MaxValue))
+                    {
+                        if (cubemapWriter != null)
+                        {
+                            cubemapWriter.WriteStartElement("cubemap");
+                            foreach (var tex in new []{arguments.RightTex, arguments.LeftTex, arguments.UpTex, arguments.DownTex, arguments.FrontTex, arguments.BackTex })
+                            {
+                                cubemapWriter.WriteWhitespace(Environment.NewLine);
+                                cubemapWriter.WriteStartElement("face");
+                                cubemapWriter.WriteAttributeString("name", _engine.EvaluateTextrueName(tex ?? anyFace));
+                                cubemapWriter.WriteEndElement();
+                                _engine.ScheduleTexture(tex, new TextureReference(TextureSemantic.Other));
+                            }
+                            cubemapWriter.WriteWhitespace(Environment.NewLine);
+                            cubemapWriter.WriteStartElement("address");
+                            cubemapWriter.WriteAttributeString("coord", "uv");
+                            cubemapWriter.WriteAttributeString("mode", "clamp");
+                            cubemapWriter.WriteEndElement();
+                            cubemapWriter.WriteWhitespace(Environment.NewLine);
+                            cubemapWriter.WriteStartElement("mipmap");
+                            cubemapWriter.WriteAttributeString("enable", "true");
+                            cubemapWriter.WriteEndElement();
+                            cubemapWriter.WriteWhitespace(Environment.NewLine);
+                            cubemapWriter.WriteStartElement("filter");
+                            cubemapWriter.WriteAttributeString("mode", "trilinear");
+                            cubemapWriter.WriteEndElement();
+                            cubemapWriter.WriteWhitespace(Environment.NewLine);
+                            cubemapWriter.WriteEndElement();
+
+                        }
+                    }
+                    WriteTexture(cubemapName, writer, "diffuse");
                 }
                 else
                 {
                     WriteTexture("Resources/unity_builtin_extra/Default-Skybox-Map.xml", writer, "diffuse");
                 }
+
+                WriteTechnique(writer, technique);
 
                 {
                     writer.WriteWhitespace("\t");
@@ -457,9 +519,9 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             }
         }
 
-        private void ExportLegacy(string urhoPath, LegacyShaderArguments arguments)
+        private void ExportLegacy(AssetKey assetGuid, string urhoPath, LegacyShaderArguments arguments)
         {
-            using (var writer = _engine.TryCreateXml(urhoPath, DateTime.MaxValue))
+            using (var writer = _engine.TryCreateXml(assetGuid, urhoPath, DateTime.MaxValue))
             {
                 if (writer == null)
                     return;
@@ -500,9 +562,9 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             }
         }
 
-        private void ExportMetallicRoughness(string urhoPath, MetallicGlossinessShaderArguments arguments)
+        private void ExportMetallicRoughness(AssetKey assetGuid, string urhoPath, MetallicGlossinessShaderArguments arguments)
         {
-            using (var writer = _engine.TryCreateXml(urhoPath, DateTime.MaxValue))
+            using (var writer = _engine.TryCreateXml(assetGuid, urhoPath, DateTime.MaxValue))
             {
                 if (writer == null)
                     return;
@@ -518,7 +580,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 _engine.SchedulePBRTextures(arguments, urhoMaterial);
 
                 _engine.ScheduleTexture(arguments.Emission, new TextureReference(TextureSemantic.Emission));
-                _engine.ScheduleTexture(arguments.Occlusion, new TextureReference(TextureSemantic.Occlusion));
+                //_engine.ScheduleTexture(arguments.Occlusion, new TextureReference(TextureSemantic.Occlusion));
             }
         }
 
@@ -567,9 +629,9 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
         }
 
 
-        private void ExportSpecularGlossiness(string urhoPath, SpecularGlossinessShaderArguments arguments)
+        private void ExportSpecularGlossiness(AssetKey assetGuid, string urhoPath, SpecularGlossinessShaderArguments arguments)
         {
-            using (var writer = _engine.TryCreateXml(urhoPath, DateTime.MaxValue))
+            using (var writer = _engine.TryCreateXml(assetGuid, urhoPath, DateTime.MaxValue))
             {
                 if (writer == null)
                     return;
@@ -583,7 +645,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 _engine.SchedulePBRTextures(arguments, urhoMaterial);
 
                 _engine.ScheduleTexture(arguments.Emission, new TextureReference(TextureSemantic.Emission));
-                _engine.ScheduleTexture(arguments.Occlusion, new TextureReference(TextureSemantic.Occlusion));
+                //_engine.ScheduleTexture(arguments.Occlusion, new TextureReference(TextureSemantic.Occlusion));
             }
         }
 

@@ -13,6 +13,8 @@ namespace UnityToCustomEngineExporter.Editor
                 SpecularGlossiness = SetupSpecularGlossinessPBR(material);
             else if (material.shader.name == "Standard")
                 MetallicGlossiness = SetupMetallicRoughnessPBR(material);
+            else if (material.shader.name == "ProBuilder/Standard Vertex Color")
+                MetallicGlossiness = SetupMetallicRoughnessPBR(material);
             else if (material.shader.name == "UnityChan/Skin")
                 MetallicGlossiness = SetupMetallicRoughnessPBR(material);
             else if (material.shader.name.StartsWith("Skybox/"))
@@ -28,21 +30,6 @@ namespace UnityToCustomEngineExporter.Editor
         public SkyboxShaderArguments Skybox { get; set; }
         public LegacyShaderArguments Legacy { get; set; }
 
-        private static void LogShaderParameters(Shader shader)
-        {
-            var sb = new StringBuilder();
-            sb.AppendFormat("Shader parameters for \"" + shader.name + "\"");
-            sb.AppendLine();
-            for (var i = 0; i < ShaderUtil.GetPropertyCount(shader); i++)
-            {
-                var propertyName = ShaderUtil.GetPropertyName(shader, i);
-                var propertyType = ShaderUtil.GetPropertyType(shader, i);
-                sb.AppendFormat("{0} {1}", propertyType, propertyName);
-                sb.AppendLine();
-            }
-
-            Debug.Log(sb.ToString());
-        }
 
         private SkyboxShaderArguments SetupSkybox(Material material)
         {
@@ -57,9 +44,14 @@ namespace UnityToCustomEngineExporter.Editor
                     var texture = material.GetTexture(propertyName);
                     switch (propertyName)
                     {
-                        case "_Tex":
-                            setupProceduralSkybox.Skybox = texture;
-                            break;
+                        case "_Tex": setupProceduralSkybox.Skybox = texture; break;
+                        case "_MainTex": setupProceduralSkybox.Skybox = texture; break;
+                        case "_FrontTex": setupProceduralSkybox.FrontTex = texture; break;
+                        case "_BackTex": setupProceduralSkybox.BackTex = texture; break;
+                        case "_LeftTex": setupProceduralSkybox.LeftTex = texture; break;
+                        case "_RightTex": setupProceduralSkybox.RightTex = texture; break;
+                        case "_UpTex": setupProceduralSkybox.UpTex = texture; break;
+                        case "_DownTex": setupProceduralSkybox.DownTex = texture; break;
                     }
                 }
             }
@@ -132,7 +124,9 @@ namespace UnityToCustomEngineExporter.Editor
                                 break;
                             case "_GlossMapScale": break;
                             case "_Glossiness": break;
-                            case "_OcclusionStrength": break;
+                            case "_OcclusionStrength":
+                                arguments.OcclusionStrength = value;
+                                break;
                             case "_Parallax": break;
                         }
 
@@ -250,7 +244,9 @@ namespace UnityToCustomEngineExporter.Editor
                             case "_Glossiness":
                                 arguments.Glossiness = value;
                                 break;
-                            case "_OcclusionStrength": break;
+                            case "_OcclusionStrength":
+                                arguments.OcclusionStrength = value;
+                                break;
                             case "_Parallax": break;
                         }
 
@@ -378,7 +374,9 @@ namespace UnityToCustomEngineExporter.Editor
                             case "_Metallic":
                                 arguments.Metallic = value;
                                 break;
-                            case "_OcclusionStrength": break;
+                            case "_OcclusionStrength":
+                                arguments.OcclusionStrength = value;
+                                break;
                             case "_Parallax": break;
                         }
 
