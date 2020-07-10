@@ -9,6 +9,7 @@ using UnityEngine.ProBuilder;
 using UnityEngine.Rendering;
 using UnityToCustomEngineExporter.Urho3D;
 using Object = UnityEngine.Object;
+
 //using UnityEngine.ProBuilder;
 
 namespace UnityToCustomEngineExporter.Editor.Urho3D
@@ -110,15 +111,26 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             if (!string.IsNullOrEmpty(prefix))
                 writer.WriteWhitespace(prefix);
             writer.WriteStartElement("node");
-            writer.WriteAttributeString("id", (++_id).ToString());
-            writer.WriteWhitespace("\n");
+            writer.WriteAttributeString("id", (++_id).ToString(CultureInfo.InvariantCulture));
+            writer.WriteWhitespace(Environment.NewLine);
 
             var subPrefix = prefix + "\t";
             var subSubPrefix = subPrefix + "\t";
 
             WriteAttribute(writer, subPrefix, "Is Enabled", isEnabled);
             WriteAttribute(writer, subPrefix, "Name", obj.name);
-            WriteAttribute(writer, subPrefix, "Tags", obj.tag);
+            if (!string.IsNullOrWhiteSpace(obj.tag))
+            {
+                writer.WriteWhitespace(subPrefix);
+                writer.WriteStartElement("attribute");
+                writer.WriteAttributeString("name", "Tags");
+                writer.WriteStartElement("string");
+                writer.WriteAttributeString("value", obj.tag);
+                writer.WriteEndElement();
+                writer.WriteEndElement();
+                writer.WriteWhitespace(Environment.NewLine);
+            }
+            //WriteAttribute(writer, subPrefix, "Tags", obj.tag);
             WriteAttribute(writer, subPrefix, "Position", obj.transform.localPosition);
             WriteAttribute(writer, subPrefix, "Rotation", obj.transform.localRotation);
             WriteAttribute(writer, subPrefix, "Scale", obj.transform.localScale);
@@ -237,6 +249,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 }
 
             var meshFilter = obj.GetComponent<MeshFilter>();
+            var animator = obj.GetComponent<Animator>();
             var proBuilderMesh = obj.GetComponent<ProBuilderMesh>();
             var meshRenderer = obj.GetComponent<MeshRenderer>();
             var skinnedMeshRenderer = obj.GetComponent<SkinnedMeshRenderer>();
@@ -246,32 +259,69 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             {
                 var lods = lodGroup.GetLODs();
                 foreach (var lod in lods.Skip(1))
-                foreach (var renderer in lod.renderers)
-                    localExcludeList.Add(renderer);
+                {
+                    foreach (var renderer in lod.renderers)
+                        localExcludeList.Add(renderer);
+                }
             }
 
-            if (meshRenderer != null && !localExcludeList.Contains(meshRenderer))
-                if (meshFilter != null || proBuilderMesh != null)
-                {
-                    StartComponent(writer, subPrefix, "StaticModel");
+            if (meshRenderer != null)
+            {
+                if (!localExcludeList.Contains(meshRenderer))
+                    if (meshFilter != null || proBuilderMesh != null)
+                    {
+                        StartComponent(writer, subPrefix, "StaticModel");
 
-                    string meshPath;
-                    if (proBuilderMesh != null)
-                    {
-                        _engine.ScheduleAssetExport(proBuilderMesh);
-                        meshPath = _engine.EvaluateMeshName(proBuilderMesh);
+                        string meshPath;
+                        if (proBuilderMesh != null)
+                        {
+                            _engine.ScheduleAssetExport(proBuilderMesh);
+                            meshPath = _engine.EvaluateMeshName(proBuilderMesh);
+                        }
+                        else
+                        {
+                            var sharedMesh = meshFilter.sharedMesh;
+                            _engine.ScheduleAssetExport(sharedMesh);
+                            meshPath = _engine.EvaluateMeshName(sharedMesh);
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(meshPath))
+                            WriteAttribute(writer, subSubPrefix, "Model", "Model;" + meshPath);
+
+                        var materials = "Material";
+                        foreach (var material in meshRenderer.sharedMaterials)
+                        {
+                            _engine.ScheduleAssetExport(material);
+                            var path = _engine.EvaluateMaterialName(material);
+                            materials += ";" + path;
+                        }
+
+                        WriteAttribute(writer, subSubPrefix, "Material", materials);
+
+                        WriteAttribute(writer, subSubPrefix, "Cast Shadows",
+                            meshRenderer.shadowCastingMode != ShadowCastingMode.Off);
+
+                        EndElement(writer, subPrefix);
+
+                        WriteAnimator(writer, subPrefix, animator);
                     }
-                    else
-                    {
-                        var sharedMesh = meshFilter.sharedMesh;
-                        _engine.ScheduleAssetExport(sharedMesh);
-                        meshPath = _engine.EvaluateMeshName(sharedMesh);
-                    }
+            }
+
+            else if (skinnedMeshRenderer != null)
+            {
+                if (!localExcludeList.Contains(skinnedMeshRenderer))
+                {
+                    StartComponent(writer, subPrefix, "AnimatedModel");
+
+
+                    var sharedMesh = skinnedMeshRenderer.sharedMesh;
+                    _engine.ScheduleAssetExport(sharedMesh);
+                    var meshPath = _engine.EvaluateMeshName(sharedMesh);
                     if (!string.IsNullOrWhiteSpace(meshPath))
                         WriteAttribute(writer, subSubPrefix, "Model", "Model;" + meshPath);
 
                     var materials = "Material";
-                    foreach (var material in meshRenderer.sharedMaterials)
+                    foreach (var material in skinnedMeshRenderer.sharedMaterials)
                     {
                         _engine.ScheduleAssetExport(material);
                         var path = _engine.EvaluateMaterialName(material);
@@ -281,36 +331,16 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                     WriteAttribute(writer, subSubPrefix, "Material", materials);
 
                     WriteAttribute(writer, subSubPrefix, "Cast Shadows",
-                        meshRenderer.shadowCastingMode != ShadowCastingMode.Off);
+                        skinnedMeshRenderer.shadowCastingMode != ShadowCastingMode.Off);
+
+                    WriteAnimationStates(writer, animator, subPrefix);
 
                     EndElement(writer, subPrefix);
                 }
-
-            if (skinnedMeshRenderer != null && !localExcludeList.Contains(skinnedMeshRenderer))
+            }
+            else if (animator != null)
             {
-                StartComponent(writer, subPrefix, "AnimatedModel");
-
-
-                var sharedMesh = skinnedMeshRenderer.sharedMesh;
-                _engine.ScheduleAssetExport(sharedMesh);
-                var meshPath = _engine.EvaluateMeshName(sharedMesh);
-                if (!string.IsNullOrWhiteSpace(meshPath))
-                    WriteAttribute(writer, subSubPrefix, "Model", "Model;" + meshPath);
-
-                var materials = "Material";
-                foreach (var material in skinnedMeshRenderer.sharedMaterials)
-                {
-                    _engine.ScheduleAssetExport(material);
-                    var path = _engine.EvaluateMaterialName(material);
-                    materials += ";" + path;
-                }
-
-                WriteAttribute(writer, subSubPrefix, "Material", materials);
-
-                WriteAttribute(writer, subSubPrefix, "Cast Shadows",
-                    skinnedMeshRenderer.shadowCastingMode != ShadowCastingMode.Off);
-
-                EndElement(writer, subPrefix);
+                WriteAnimator(writer, subPrefix, animator);
             }
 
             foreach (Transform childTransform in obj.transform)
@@ -323,92 +353,86 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             writer.WriteWhitespace("\n");
         }
 
-        private void ExportLight(XmlWriter writer, Light light, string subPrefix, string subSubPrefix)
+        private void WriteAnimator(XmlWriter writer, string prefix, Animator animator)
         {
-            if (light != null && light.type != LightType.Area)
-            {
-                StartComponent(writer, subPrefix, "Light");
-                if (light.type == LightType.Directional)
-                {
-                    WriteAttribute(writer, subSubPrefix, "Light Type", "Directional");
-                    var shadowCascades = QualitySettings.shadowCascades;
-                    if (shadowCascades > 0)
-                    {
-                        if (shadowCascades > 4)
-                            shadowCascades = 4;
-                        var cascadeMask = new Vector4[]
-                        {
-                            new Vector4(0, 0, 0, 0),
-                            new Vector4(1, 0, 0, 0),
-                            new Vector4(1, 1, 0, 0),
-                            new Vector4(1, 1, 1, 0),
-                        };
-                        var shadowCascade4Split = QualitySettings.shadowCascade4Split * QualitySettings.shadowDistance;
-                        var csmSplits = Vector4.Scale(
-                            new Vector4(shadowCascade4Split.x, shadowCascade4Split.y, shadowCascade4Split.z, QualitySettings.shadowDistance),
-                            cascadeMask[shadowCascades-1]);
-                        switch (shadowCascades)
-                        {
-                            case 1: csmSplits.x = QualitySettings.shadowDistance; break;
-                            case 2: csmSplits.y = QualitySettings.shadowDistance; break;
-                            case 3: csmSplits.z = QualitySettings.shadowDistance; break;
-                            case 4: csmSplits.w = QualitySettings.shadowDistance; break;
-                        }
-                        WriteAttribute(writer, subSubPrefix, "CSM Splits", csmSplits);
-                    }
-                }
-                else if (light.type == LightType.Spot)
-                {
-                    WriteAttribute(writer, subSubPrefix, "Light Type", "Spot");
-                }
-                else if (light.type == LightType.Point)
-                {
-                    WriteAttribute(writer, subSubPrefix, "Range", light.range);
-                }
+            if (animator == null)
+                return;
+            StartComponent(writer, prefix, "AnimatedModel");
+            var subPrefix = prefix + "\t";
 
-                WriteAttribute(writer, subSubPrefix, "Color", light.color.linear);
-                if (_engine.UsePhysicalValues)
-                {
-                    WriteAttribute(writer, subSubPrefix, "Brightness Multiplier", light.intensity * 981.75f);
-                    WriteAttribute(writer, subSubPrefix, "Use Physical Values", "true");
-                }
-                else
-                {
-                    WriteAttribute(writer, subSubPrefix, "Brightness Multiplier", light.intensity * Mathf.PI * 2.0f);
-                    WriteAttribute(writer, subSubPrefix, "Use Physical Values", "false");
-                }
-                WriteAttribute(writer, subSubPrefix, "Depth Constant Bias", 0.0001f);
-                WriteAttribute(writer, subSubPrefix, "Cast Shadows", light.shadows != LightShadows.None);
-                if (light.cookie != null)
-                {
-                    _engine.ScheduleTexture(light.cookie);
-                    WriteAttribute(writer, subSubPrefix, "Light Shape Texture",
-                        "Texture2D;" + _engine.EvaluateTextrueName(light.cookie));
-                }
-
-                EndElement(writer, subPrefix);
-            }
+            WriteAnimationStates(writer, animator, subPrefix);
+            EndElement(writer, prefix);
         }
 
-        private void ExportAudioSource(XmlWriter writer, AudioSource audioSource, string subPrefix)
+        private void WriteAnimationStates(XmlWriter writer, Animator animator, string subPrefix)
         {
-            string subSubPrefix = subPrefix + "\t";
-            StartComponent(writer, subPrefix, "SoundSource3D");
-            if (audioSource.clip != null)
+            if (animator == null)
+                return;
+            writer.WriteWhitespace(subPrefix);
+            writer.WriteStartElement("attribute");
+            writer.WriteAttributeString("name", "Animation States");
+            writer.WriteWhitespace(Environment.NewLine);
+            var subSubPrefix = subPrefix + "\t";
+            var controller = animator.runtimeAnimatorController;
+            if (controller == null)
             {
-                var name = _engine.EvaluateAudioClipName(audioSource.clip);
-                _engine.ScheduleAssetExport(audioSource.clip);
-                WriteAttribute(writer, subSubPrefix, "Sound", "Sound;" + name);
-                WriteAttribute(writer, subSubPrefix, "Frequency", audioSource.clip.frequency);
-                WriteAttribute(writer, subSubPrefix, "Is Playing", audioSource.playOnAwake);
-                WriteAttribute(writer, subSubPrefix, "Play Position", 0);
+                WriteVariant(writer, subSubPrefix, 0);
             }
-            EndElement(writer, subPrefix);
+            else
+            {
+                WriteVariant(writer, subSubPrefix, controller.animationClips.Length);
+                foreach (var clip in controller.animationClips)
+                {
+                    WriteVariant(writer, subSubPrefix, "ResourceRef", "Animation;" + _engine.EvaluateAnimationName(clip));
+                    _engine.ScheduleAssetExport(clip);
+                    var startBone = "";
+                    bool isLooped = true;
+                    float weight = 1.0f;
+                    float time = 0.0f;
+                    int layer = 0;
+                    WriteVariant(writer, subSubPrefix, startBone);
+                    WriteVariant(writer, subSubPrefix, isLooped);
+                    WriteVariant(writer, subSubPrefix, weight);
+                    WriteVariant(writer, subSubPrefix, time);
+                    WriteVariant(writer, subSubPrefix, layer);
+                }
+            }
+
+            writer.WriteWhitespace(subPrefix);
+            writer.WriteEndElement();
+            writer.WriteWhitespace(Environment.NewLine);
         }
 
+        private void WriteVariant(XmlWriter writer, string subSubPrefix, int value)
+        {
+            WriteVariant(writer, subSubPrefix, "Int", value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static void WriteVariant(XmlWriter writer, string subSubPrefix, string type, string valueStr)
+        {
+            writer.WriteWhitespace(subSubPrefix);
+            writer.WriteStartElement("variant");
+            writer.WriteAttributeString("type", type);
+            writer.WriteAttributeString("value", valueStr);
+            writer.WriteEndElement();
+            writer.WriteWhitespace(Environment.NewLine);
+        }
+
+        private void WriteVariant(XmlWriter writer, string subSubPrefix, float value)
+        {
+            WriteVariant(writer, subSubPrefix, "Float", value.ToString(CultureInfo.InvariantCulture));
+        }
+        private void WriteVariant(XmlWriter writer, string subSubPrefix, bool value)
+        {
+            WriteVariant(writer, subSubPrefix, "Bool", value?"true":"false");
+        }
+        private void WriteVariant(XmlWriter writer, string subSubPrefix, string value)
+        {
+            WriteVariant(writer, subSubPrefix, "String", value);
+        }
         protected void WriteSkyboxComponent(XmlWriter writer, string subPrefix, Material skyboxMaterial)
         {
-            string subSubPrefix = subPrefix + "\t";
+            var subSubPrefix = subPrefix + "\t";
             StartComponent(writer, subPrefix, "Skybox");
             if (skyboxMaterial.shader.name == "Skybox/Panoramic")
             {
@@ -432,6 +456,101 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             _engine.ScheduleAssetExport(skyboxMaterial);
             var materials = "Material;" + _engine.EvaluateMaterialName(skyboxMaterial);
             WriteAttribute(writer, subSubPrefix, "Material", materials);
+            EndElement(writer, subPrefix);
+        }
+
+        private void ExportLight(XmlWriter writer, Light light, string subPrefix, string subSubPrefix)
+        {
+            if (light != null && light.type != LightType.Area)
+            {
+                StartComponent(writer, subPrefix, "Light");
+                if (light.type == LightType.Directional)
+                {
+                    WriteAttribute(writer, subSubPrefix, "Light Type", "Directional");
+                    var shadowCascades = QualitySettings.shadowCascades;
+                    if (shadowCascades > 0)
+                    {
+                        if (shadowCascades > 4)
+                            shadowCascades = 4;
+                        var cascadeMask = new[]
+                        {
+                            new Vector4(0, 0, 0, 0),
+                            new Vector4(1, 0, 0, 0),
+                            new Vector4(1, 1, 0, 0),
+                            new Vector4(1, 1, 1, 0)
+                        };
+                        var shadowCascade4Split = QualitySettings.shadowCascade4Split * QualitySettings.shadowDistance;
+                        var csmSplits = Vector4.Scale(
+                            new Vector4(shadowCascade4Split.x, shadowCascade4Split.y, shadowCascade4Split.z,
+                                QualitySettings.shadowDistance),
+                            cascadeMask[shadowCascades - 1]);
+                        switch (shadowCascades)
+                        {
+                            case 1:
+                                csmSplits.x = QualitySettings.shadowDistance;
+                                break;
+                            case 2:
+                                csmSplits.y = QualitySettings.shadowDistance;
+                                break;
+                            case 3:
+                                csmSplits.z = QualitySettings.shadowDistance;
+                                break;
+                            case 4:
+                                csmSplits.w = QualitySettings.shadowDistance;
+                                break;
+                        }
+
+                        WriteAttribute(writer, subSubPrefix, "CSM Splits", csmSplits);
+                    }
+                }
+                else if (light.type == LightType.Spot)
+                {
+                    WriteAttribute(writer, subSubPrefix, "Light Type", "Spot");
+                }
+                else if (light.type == LightType.Point)
+                {
+                    WriteAttribute(writer, subSubPrefix, "Range", light.range);
+                }
+
+                WriteAttribute(writer, subSubPrefix, "Color", light.color.linear);
+                if (_engine.UsePhysicalValues)
+                {
+                    WriteAttribute(writer, subSubPrefix, "Brightness Multiplier", light.intensity * 981.75f);
+                    WriteAttribute(writer, subSubPrefix, "Use Physical Values", "true");
+                }
+                else
+                {
+                    WriteAttribute(writer, subSubPrefix, "Brightness Multiplier", light.intensity * Mathf.PI * 2.0f);
+                    WriteAttribute(writer, subSubPrefix, "Use Physical Values", "false");
+                }
+
+                WriteAttribute(writer, subSubPrefix, "Depth Constant Bias", 0.0001f);
+                WriteAttribute(writer, subSubPrefix, "Cast Shadows", light.shadows != LightShadows.None);
+                if (light.cookie != null)
+                {
+                    _engine.ScheduleTexture(light.cookie);
+                    WriteAttribute(writer, subSubPrefix, "Light Shape Texture",
+                        "Texture2D;" + _engine.EvaluateTextrueName(light.cookie));
+                }
+
+                EndElement(writer, subPrefix);
+            }
+        }
+
+        private void ExportAudioSource(XmlWriter writer, AudioSource audioSource, string subPrefix)
+        {
+            var subSubPrefix = subPrefix + "\t";
+            StartComponent(writer, subPrefix, "SoundSource3D");
+            if (audioSource.clip != null)
+            {
+                var name = _engine.EvaluateAudioClipName(audioSource.clip);
+                _engine.ScheduleAssetExport(audioSource.clip);
+                WriteAttribute(writer, subSubPrefix, "Sound", "Sound;" + name);
+                WriteAttribute(writer, subSubPrefix, "Frequency", audioSource.clip.frequency);
+                WriteAttribute(writer, subSubPrefix, "Is Playing", audioSource.playOnAwake);
+                WriteAttribute(writer, subSubPrefix, "Play Position", 0);
+            }
+
             EndElement(writer, subPrefix);
         }
 
@@ -549,7 +668,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
 
             var (min, max, size) = GetTerrainSize(terrainData);
 
-            var offset = new Vector3(terrainSize.x * 0.5f, terrainSize.y * ( min), terrainSize.z * 0.5f);
+            var offset = new Vector3(terrainSize.x * 0.5f, terrainSize.y * min, terrainSize.z * 0.5f);
             WriteAttribute(writer, subPrefix, "Position", offset);
             StartComponent(writer, subPrefix, "Terrain");
 
@@ -558,7 +677,8 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             WriteAttribute(writer, subSubPrefix, "Material",
                 "Material;" + _engine.EvaluateTerrainMaterial(terrainData));
             //WriteTerrainMaterial(terrainData, materialFileName, "Textures/Terrains/" + folderAndName + ".Weights.tga");
-            var vertexSpacing = new Vector3(terrainSize.x / size.x, terrainSize.y * (max - min) / 255.0f, terrainSize.z / size.y);
+            var vertexSpacing = new Vector3(terrainSize.x / size.x, terrainSize.y * (max - min) / 255.0f,
+                terrainSize.z / size.y);
             WriteAttribute(writer, subSubPrefix, "Vertex Spacing",
                 vertexSpacing);
             EndElement(writer, subPrefix);
