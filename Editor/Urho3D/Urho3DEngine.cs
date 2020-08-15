@@ -4,7 +4,6 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Xml;
-using UnityToCustomEngineExporter.Editor.Urho3D;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -454,6 +453,16 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             var name = _meshExporter.EvaluateLODGroupName(lodGroup, prefabContext);
             _meshExporter.ExportLODGroup(lodGroup, prefabContext);
             return name;
+        }
+
+        public string DecorateName(string materialName)
+        {
+            if (string.IsNullOrEmpty(materialName))
+                return materialName;
+            if (!Options.ASCIIOnly)
+                return materialName;
+
+            return Uri.EscapeDataString(materialName);
         }
     }
 }
