@@ -2,12 +2,15 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net;
 using System.Xml;
+using TreeEditor;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.ProBuilder;
 using UnityEngine.Rendering;
 using UnityToCustomEngineExporter.Urho3D;
+using Math = System.Math;
 using Object = UnityEngine.Object;
 
 //using UnityEngine.ProBuilder;
@@ -177,6 +180,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 else if (component is MeshCollider meshCollider)
                 {
                     StartComponent(writer, subPrefix, "CollisionShape", meshCollider.enabled);
+                    WriteCommonCollisionAttributes(writer, subSubPrefix, meshCollider);
                     WriteAttribute(writer, subSubPrefix, "Shape Type", "TriangleMesh");
                     if (meshCollider.sharedMesh != null)
                     {
@@ -188,16 +192,17 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                     }
 
                     EndElement(writer, subPrefix);
-                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix);
+                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix, meshCollider.enabled);
                 }
                 else if (component is BoxCollider boxCollider)
                 {
                     StartComponent(writer, subPrefix, "CollisionShape", boxCollider.enabled);
+                    WriteCommonCollisionAttributes(writer, subSubPrefix, boxCollider);
                     WriteAttribute(writer, subSubPrefix, "Size", boxCollider.size);
                     WriteAttribute(writer, subSubPrefix, "Offset Position", boxCollider.center);
                     //WriteAttribute(writer, subSubPrefix, "Offset Rotation", new Quaternion(0,0,0, 1));
                     EndElement(writer, subPrefix);
-                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix);
+                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix, boxCollider.enabled);
                 }
                 else if (component is TerrainCollider terrainCollider)
                 {
@@ -206,14 +211,16 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 else if (component is SphereCollider sphereCollider)
                 {
                     StartComponent(writer, subPrefix, "CollisionShape", sphereCollider.enabled);
+                    WriteCommonCollisionAttributes(writer, subSubPrefix, sphereCollider);
                     WriteAttribute(writer, subSubPrefix, "Shape Type", "Sphere");
                     WriteAttribute(writer, subSubPrefix, "Offset Position", sphereCollider.center);
                     EndElement(writer, subPrefix);
-                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix);
+                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix, sphereCollider.enabled);
                 }
                 else if (component is CapsuleCollider capsuleCollider)
                 {
                     StartComponent(writer, subPrefix, "CollisionShape", capsuleCollider.enabled);
+                    WriteCommonCollisionAttributes(writer, subSubPrefix, capsuleCollider);
                     if (component.name == "Cylinder")
                         WriteAttribute(writer, subSubPrefix, "Shape Type", "Cylinder");
                     else
@@ -222,18 +229,23 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                     WriteAttribute(writer, subSubPrefix, "Size", new Vector3(d, capsuleCollider.height, d));
                     WriteAttribute(writer, subSubPrefix, "Offset Position", capsuleCollider.center);
                     EndElement(writer, subPrefix);
-                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix);
+                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix, capsuleCollider.enabled);
                 }
                 else if (component is Skybox skybox)
                 {
                     var skyboxMaterial = skybox.material;
                     WriteSkyboxComponent(writer, subPrefix, skyboxMaterial, prefabContext, skybox.enabled);
                 }
+                else if (component is CharacterController characterController)
+                {
+                    WriteCharacterController(writer, subPrefix, characterController, prefabContext);
+                }
                 else if (component is Collider collider)
                 {
                     StartComponent(writer, subPrefix, "CollisionShape", collider.enabled);
+                    WriteCommonCollisionAttributes(writer, subSubPrefix, collider);
                     EndElement(writer, subPrefix);
-                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix);
+                    WriteStaticRigidBody(writer, obj, subPrefix, subSubPrefix, collider.enabled);
                 }
                 else if (component is Animation animation)
                 {
@@ -359,6 +371,39 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 writer.WriteWhitespace(prefix);
             writer.WriteEndElement();
             writer.WriteWhitespace("\n");
+        }
+
+        private void WriteCharacterController(XmlWriter writer, string prefix, CharacterController characterController, PrefabContext prefabContext)
+        {
+            var subPrefix = prefix + "\t";
+
+            StartComponent(writer, prefix, "CollisionShape", characterController.enabled);
+            WriteCommonCollisionAttributes(writer, subPrefix, characterController);
+            WriteAttribute(writer, subPrefix, "Shape Type", "Capsule");
+            var d = characterController.radius * 2.0f;
+            WriteAttribute(writer, subPrefix, "Size", new Vector3(d, characterController.height, d));
+            WriteAttribute(writer, subPrefix, "Offset Position", characterController.center);
+            EndElement(writer, prefix);
+
+            StartComponent(writer, prefix, "RigidBody", characterController.enabled);
+            var localToWorldMatrix = characterController.gameObject.transform.localToWorldMatrix;
+            var pos = new Vector3(localToWorldMatrix.m03, localToWorldMatrix.m13, localToWorldMatrix.m23);
+            WriteAttribute(writer, subPrefix, "Physics Position", pos);
+            WriteAttribute(writer, subPrefix, "Angular Factor", Vector3.zero);
+            WriteAttribute(writer, subPrefix, "Collision Event Mode", "Always");
+            WriteAttribute(writer, subPrefix, "Is Kinematic", "true");
+            WriteAttribute(writer, subPrefix, "Is Trigger", "true");
+            EndElement(writer, prefix);
+
+            StartComponent(writer, prefix, "KinematicCharacterController", characterController.enabled);
+            WriteAttribute(writer, subPrefix, "Max Slope", characterController.slopeLimit);
+            WriteAttribute(writer, subPrefix, "Step Height", characterController.stepOffset);
+            EndElement(writer, prefix);
+        }
+
+        private void WriteCommonCollisionAttributes(XmlWriter writer, string subSubPrefix, Collider collider)
+        {
+            WriteAttribute(writer, subSubPrefix, "Collision Margin", collider.contactOffset);
         }
 
         private void ExportCamera(XmlWriter writer, Camera camera, string subPrefix, string subSubPrefix)
@@ -641,11 +686,12 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             EndElement(writer, subPrefix);
         }
 
-        private void WriteStaticRigidBody(XmlWriter writer, GameObject obj, string subPrefix, string subSubPrefix)
+        private void WriteStaticRigidBody(XmlWriter writer, GameObject obj, string subPrefix, string subSubPrefix,
+            bool meshColliderEnabled)
         {
             if (obj.GetComponent<Rigidbody>() == null)
             {
-                StartComponent(writer, subPrefix, "RigidBody", true);
+                StartComponent(writer, subPrefix, "RigidBody", meshColliderEnabled);
                 var localToWorldMatrix = obj.transform.localToWorldMatrix;
                 var pos = new Vector3(localToWorldMatrix.m03, localToWorldMatrix.m13, localToWorldMatrix.m23);
                 WriteAttribute(writer, subSubPrefix, "Physics Position", pos);
@@ -775,7 +821,8 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             if (terrainCollider != null)
             {
                 StartComponent(writer, subPrefix, "CollisionShape", enabled);
-                WriteAttribute(writer, subPrefix, "Shape Type", "Terrain");
+                WriteCommonCollisionAttributes(writer, subSubPrefix, terrainCollider);
+                WriteAttribute(writer, subSubPrefix, "Shape Type", "Terrain");
                 EndElement(writer, subPrefix);
                 StartComponent(writer, subPrefix, "RigidBody", enabled);
                 var localToWorldMatrix = terrainCollider.transform.localToWorldMatrix;
@@ -793,6 +840,30 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 EndElement(writer, subPrefix);
             }
 
+            EndElement(writer, subPrefix);
+
+            var numTrees = Math.Min(terrainData.treeInstances.Length, terrainData.treeInstanceCount);
+            //numTrees = Math.Min(numTrees, 20);
+            for (var index = 0; index < numTrees; index++)
+            {
+                var treeInstance = terrainData.treeInstances[index];
+                ExportTree(writer, subPrefix, treeInstance, terrainData, enabled, prefabContext);
+            }
+        }
+
+        private void ExportTree(XmlWriter writer, string subPrefix, TreeInstance treeInstance,
+            TerrainData terrainData, bool enabled, PrefabContext prefabContext)
+        {
+            var treePrototype = terrainData.treePrototypes[treeInstance.prototypeIndex];
+            StartNode(writer, subPrefix);
+            var position = Vector3.Scale(terrainData.size, treeInstance.position);
+            WriteAttribute(writer, subPrefix, "Position", position);
+            var scale = new Vector3(treeInstance.widthScale, treeInstance.heightScale, treeInstance.widthScale);
+            WriteAttribute(writer, subPrefix, "Scale", scale);
+            var rotation = Quaternion.AngleAxis(treeInstance.rotation, Vector3.up);
+            WriteAttribute(writer, subPrefix, "Rotation", rotation);
+            
+            WriteObject(writer, subPrefix + "\t", treePrototype.prefab, new HashSet<Renderer>(), enabled, prefabContext);
             EndElement(writer, subPrefix);
         }
 

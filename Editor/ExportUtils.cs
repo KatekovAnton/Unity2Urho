@@ -179,5 +179,18 @@ namespace UnityToCustomEngineExporter.Editor
             }
             return path.ToString();
         }
+
+        public static string GetName(Object asset)
+        {
+            if (!string.IsNullOrWhiteSpace(asset.name))
+                return asset.name;
+            if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(asset, out string guid, out long localId))
+            {
+                return guid + "_" + localId;
+            }
+
+            return asset.GetInstanceID().ToString();
+            //return asset.GetInstanceID().ToString();
+        }
     }
 }

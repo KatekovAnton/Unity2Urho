@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using UnityEditor;
@@ -33,7 +34,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             var trackBones = CloneTree(root).Select(_ => new BoneTrack(_)).ToList();
             var cloneRoot = trackBones[0].gameObject;
             ISampler sampler;
-            if (clipAnimation.legacy)
+            if (!clipAnimation.isHumanMotion)
                 sampler = new LegacySampler(cloneRoot, clipAnimation);
             else
                 sampler = new AnimatorSampler(cloneRoot, clipAnimation);
@@ -58,15 +59,42 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             writer.Write(trackBones.Count);
             foreach (var bone in trackBones)
             {
+                bone.Optimize();
+            }
+            foreach (var bone in trackBones)
+            {
+                var mask = 0;
+                bool hasTranslation = false;
+                bool hasRotation = false;
+                bool hasScale = false;
+                if (bone.translation != null && bone.translation.Count > 0)
+                {
+                    mask |= 1;
+                    hasTranslation = true;
+                }
+
+                if (bone.rotation != null && bone.rotation.Count > 0)
+                {
+                    mask |= 2;
+                    hasRotation = true;
+                }
+
+                if (bone.scale != null && bone.scale.Count > 0)
+                {
+                    mask |= 4;
+                    hasScale = true;
+                }
+                if (mask == 0)
+                    continue;
                 WriteStringSZ(writer, _engine.DecorateName(bone.gameObject.name));
-                writer.Write((byte)7);
-                writer.Write(bone.translation.Count);
-                for (var frame = 0; frame < bone.translation.Count; ++frame)
+                writer.Write((byte)mask);
+                writer.Write(bone.keys.Count);
+                for (var frame = 0; frame < bone.keys.Count; ++frame)
                 {
                     writer.Write(bone.keys[frame]);
-                    Write(writer, bone.translation[frame]);
-                    Write(writer, bone.rotation[frame]);
-                    Write(writer, bone.scale[frame]);
+                    if (hasTranslation) Write(writer, bone.translation[frame]);
+                    if (hasRotation) Write(writer, bone.rotation[frame]);
+                    if (hasScale) Write(writer, bone.scale[frame]);
                 }
             }
 
@@ -81,9 +109,9 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
         {
             public readonly GameObject gameObject;
             public readonly List<float> keys = new List<float>();
-            public readonly List<Vector3> translation = new List<Vector3>();
-            public readonly List<Quaternion> rotation = new List<Quaternion>();
-            public readonly List<Vector3> scale = new List<Vector3>();
+            public List<Vector3> translation = new List<Vector3>();
+            public List<Quaternion> rotation = new List<Quaternion>();
+            public List<Vector3> scale = new List<Vector3>();
 
             public readonly Vector3 originalTranslation;
             public readonly Quaternion originalRotation;
@@ -116,6 +144,19 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 translation.Add(gameObject.transform.localPosition);
                 rotation.Add(gameObject.transform.localRotation);
                 scale.Add(gameObject.transform.localScale);
+            }
+
+            public void Optimize()
+            {
+                if (scale != null)
+                    if (scale.All(_ => _ == Vector3.one))
+                        scale = null;
+                if (rotation != null)
+                    if (rotation.All(_ => _ == Quaternion.identity))
+                        rotation = null;
+                if (translation != null)
+                    if (translation.All(_ => _ == Vector3.zero))
+                        translation = null;
             }
         }
 
@@ -239,14 +280,15 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 if (_length < 1e-6f) _length = 1e-6f;
                 _animator = _root.AddComponent<Animator>();
 
-                _controllerPath = Path.Combine(Path.Combine("Assets", "UnityToCustomEngineExporter"),
-                    "TempController.controller");
+                _controllerPath = Path.Combine("Assets", "UnityToCustomEngineExporter.TempController.controller");
                 _controller =
                     AnimatorController.CreateAnimatorControllerAtPathWithClip(_controllerPath, _animationClip);
                 var layers = _controller.layers;
                 layers[0].iKPass = true;
                 //layers[0].stateMachine.
                 _controller.layers = layers;
+                _animator.avatar = GetAvatar(animationClip);
+                _animator.applyRootMotion = true;
                 _animator.runtimeAnimatorController = _controller;
             }
 
@@ -277,64 +319,128 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             void Sample(float time);
         }
 
-        public void ExportAnimation(AnimationClip clipAnimation, PrefabContext prefabContext)
+        public void ExportAnimation(AnimationClip clip, PrefabContext prefabContext)
         {
             if (!_engine.Options.ExportAnimations)
                 return;
 
-            var name = GetSafeFileName(_engine.DecorateName(clipAnimation.name));
+            var aniFilePath = EvaluateAnimationName(clip, prefabContext);
 
-            //_assetCollection.AddAnimationPath(clipAnimation, fileName);
+            ExportMetadata(ExportUtils.ReplaceExtension(aniFilePath, ".xml"), clip, prefabContext);
 
-            var aniFilePath = EvaluateAnimationName(clipAnimation, prefabContext);
-            using (var file = _engine.TryCreate(clipAnimation.GetKey(), aniFilePath,
-                ExportUtils.GetLastWriteTimeUtc(clipAnimation)))
+            using (var file = _engine.TryCreate(clip.GetKey(), aniFilePath,
+                ExportUtils.GetLastWriteTimeUtc(clip)))
             {
                 if (file == null)
                     return;
                 using (var writer = new BinaryWriter(file))
                 {
                     writer.Write(new byte[] { 0x55, 0x41, 0x4e, 0x49 });
-                    WriteStringSZ(writer, _engine.DecorateName(clipAnimation.name));
-                    writer.Write(clipAnimation.length);
+                    WriteStringSZ(writer, _engine.DecorateName(ExportUtils.GetName(clip)));
+                    writer.Write(clip.length);
 
-                    if (clipAnimation.legacy)
+                    // Legacy animation
+                    if (clip.legacy)
                     {
-                        WriteTracksAsIs(clipAnimation, writer);
+                        WriteTracksAsIs(clip, writer);
+                    }
+                    else if (clip.isHumanMotion)
+                    {
+                        WriteHumanoidAnimation(clip, writer);
                     }
                     else
                     {
-                        var allBindings = AnimationUtility.GetCurveBindings(clipAnimation);
-                        var rootBones =
-                            new HashSet<string>(allBindings.Select(_ => GetRootBoneName(_)).Where(_ => _ != null));
-                        if (rootBones.Count != 1)
-                        {
-                            Debug.LogWarning(aniFilePath + ": Multiple root bones found (" +
-                                             string.Join(", ", rootBones.ToArray()) +
-                                             "), falling back to curve export");
-                            WriteTracksAsIs(clipAnimation, writer);
-                        }
-                        else
-                        {
-                            var rootBoneName = rootBones.First();
-                            var rootGOs = _skeletons
-                                .Select(_ => _.name == rootBoneName ? _.transform : _.transform.Find(rootBoneName))
-                                .Where(_ => _ != null).ToList();
-                            if (rootGOs.Count == 1)
-                            {
-                                WriteSkelAnimation(clipAnimation, rootGOs.First().gameObject, writer);
-                            }
-                            else
-                            {
-                                Debug.LogWarning(aniFilePath +
-                                                 ": Multiple game objects found that match root bone name, falling back to curve export");
-                                WriteTracksAsIs(clipAnimation, writer);
-                            }
-                        }
+                        WriteGenericAnimation(clip, writer);
                     }
                 }
             }
 
+        }
+
+        private void ExportMetadata(string metadataFileName, AnimationClip clip, PrefabContext prefabContext)
+        {
+            using (var file = _engine.TryCreateXml(clip.GetKey(), metadataFileName, ExportUtils.GetLastWriteTimeUtc(clip)))
+            {
+                if (file == null)
+                    return;
+
+                file.WriteStartElement("animation");
+                file.WriteWhitespace(Environment.NewLine);
+                foreach (var clipEvent in clip.events)
+                {
+                    file.WriteWhitespace("\t");
+                    file.WriteStartElement("trigger");
+                    file.WriteAttributeString("time", BaseNodeExporter.Format(clipEvent.time));
+                    file.WriteAttributeString("type", "String");
+                    file.WriteAttributeString("value", clipEvent.functionName);
+                    file.WriteEndElement();
+                    file.WriteWhitespace(Environment.NewLine);
+                }
+                file.WriteEndElement();
+                file.WriteWhitespace(Environment.NewLine);
+            }
+        }
+
+        private void WriteHumanoidAnimation(AnimationClip clip, BinaryWriter writer)
+        {
+            Avatar avatar = GetAvatar(clip);
+            if (avatar != null)
+            {
+                if (WriteHumanoidAnimation(clip, avatar, writer))
+                    return;
+            }
+            Debug.Log("Failed to export "+clip.name+". Try to change it to Generic or Legacy setup.");
+            var numTracks = (uint)0;
+            writer.Write(numTracks);
+         }
+
+        private bool WriteHumanoidAnimation(AnimationClip clip, Avatar avatar, BinaryWriter writer)
+        {
+            var avatarPath = AssetDatabase.GetAssetPath(avatar);
+            var prefabRoot = AssetDatabase.LoadAssetAtPath(avatarPath, typeof(GameObject)) as GameObject;
+            if (prefabRoot == null)
+                return false;
+
+            WriteSkelAnimation(clip, prefabRoot, writer);
+            return true;
+        }
+
+        private static Avatar GetAvatar(AnimationClip clip)
+        {
+            var clipPath = AssetDatabase.GetAssetPath(clip);
+            var importer = AssetImporter.GetAtPath(clipPath) as ModelImporter;
+            return importer?.sourceAvatar;
+        }
+
+        private void WriteGenericAnimation(AnimationClip clip, BinaryWriter writer)
+        {
+            var allBindings = AnimationUtility.GetCurveBindings(clip);
+            var rootBones =
+                new HashSet<string>(allBindings.Select(_ => GetRootBoneName(_)).Where(_ => _ != null));
+            if (rootBones.Count != 1)
+            {
+                Debug.LogWarning(clip.name + ": Multiple root bones found (" +
+                                 string.Join(", ", rootBones.ToArray()) +
+                                 "), falling back to curve export");
+                WriteTracksAsIs(clip, writer);
+            }
+            else
+            {
+                var rootBoneName = rootBones.First();
+                var rootGOs = _skeletons
+                    .Select(_ => _.name == rootBoneName ? _.transform : _.transform.Find(rootBoneName))
+                    .Where(_ => _ != null).ToList();
+                if (rootGOs.Count == 1)
+                {
+                    WriteSkelAnimation(clip, rootGOs.First().gameObject, writer);
+                }
+                else
+                {
+                    Debug.LogWarning(clip.name +
+                                     ": Multiple game objects found that match root bone name, falling back to curve export");
+                    WriteTracksAsIs(clip, writer);
+                }
+            }
         }
 
         public string EvaluateAnimationName(AnimationClip clip, PrefabContext prefabContext)
@@ -349,7 +455,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             {
                 folder = prefabContext.TempFolder;
             }
-            return ExportUtils.Combine(folder, ExportUtils.SafeFileName(_engine.DecorateName(clip.name)) + ".ani");
+            return ExportUtils.Combine(folder, ExportUtils.SafeFileName(_engine.DecorateName(ExportUtils.GetName(clip))) + ".ani");
         }
         private IEnumerable<GameObject> CloneTree(GameObject go)
         {
